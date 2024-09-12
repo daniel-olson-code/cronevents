@@ -1,4 +1,4 @@
 psycopg2-binary
 python-dotenv
-buelon==1.0.58
+buelon
 

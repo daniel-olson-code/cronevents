@@ -17,7 +17,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="cronevents",
-    version="0.0.26",
+    version="0.0.28",
     author="Daniel Olson",
     author_email="daniel@orphos.cloud",
     description="A package to run cron jobs(events)",
@@ -27,9 +27,9 @@ setup(
     packages=find_packages(),
     package_name="cronevents",
     install_requires=requirements,
-    # entry_points={
-    #     'console_scripts': ['cevents=buelon.command_line:cli'],
-    # },
+    entry_points={
+        'console_scripts': ['cronevents=cronevents.cli:cli'],
+    },
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",

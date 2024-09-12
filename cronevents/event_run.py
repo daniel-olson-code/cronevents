@@ -1,7 +1,7 @@
-import os, sys, json, importlib  # , io, threading, uuid, time, traceback
-# from event_manager import get_db
+import os, sys, json, importlib
 
-if __name__ == "__main__":
+
+def main():
     try:
         # get module
         og_module = module = sys.argv[-4]
@@ -25,7 +25,7 @@ if __name__ == "__main__":
         except Exception as e:
             print('Error deleting ', sys.argv[-1], e)
 
-        print(module, func, args, kwargs)
+        # print(module, func, args, kwargs)
 
         # import module
         module = importlib.import_module(module)
@@ -45,6 +45,10 @@ if __name__ == "__main__":
             os.remove(sys.argv[-1])
         except:
             pass
+
+
+if __name__ == "__main__":
+    main()
 
 
 

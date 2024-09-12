@@ -1,57 +1,83 @@
 import os, sys, time, shlex, subprocess  # , io, threading, uuid, time, traceback
-from event_manager import get_db
+import datetime
+from cronevents.event_manager import get_db
+import buelon.helpers.sqlite3_helper
+import buelon.helpers.postgres
 
-try:
-    # get event id
-    event_id = sys.argv[-5]
 
-    # get module
-    og_module = module = sys.argv[-4]
+LOG_CRON_EVENT_LOGS = os.environ.get('LOG_CRON_EVENT_LOGS', None) == 'true'
 
-    # get function name
-    func = sys.argv[-3]
 
-    # get args
-    args = sys.argv[-2]
-
-    # get kwargs
-    kwargs = sys.argv[-1]
-
-    print(module, func, args, kwargs)
-
-    script = os.path.join(os.getcwd(), 'event_run.py')
-    cmd = f'{sys.executable} {script} {module} {func} {args} {kwargs}'
-    print('running', f'"{cmd}"')
-
-    process = subprocess.Popen(
-        shlex.split(cmd),  # shell=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE
-    )
-
-    # wait for the process to terminate
-    out, err = process.communicate()
-    t = time.time()
-    logs = [
-        {'index': i, 'line': line, 'epoch': t}
-        for i, line in enumerate(out.decode().splitlines())
-    ]
-    get_db().upload_table(
-        f'event_logs_{event_id}',
-        logs,
-        id_column='index'
-    )
-    errcode = process.returncode
-finally:
+def main():
     try:
-        os.remove(sys.argv[-2])
-    except:
-        pass
-    try:
-        os.remove(sys.argv[-1])
-    except:
-        pass
+        # get event id
+        event_id = sys.argv[-5]
 
+        # get module
+        og_module = module = sys.argv[-4]
+
+        # get function name
+        func = sys.argv[-3]
+
+        # get args
+        args = sys.argv[-2]
+
+        # get kwargs
+        kwargs = sys.argv[-1]
+
+        # print(module, func, args, kwargs)
+
+        script = '-c "import cronevents.event_run;cronevents.event_run.main()"'  # os.path.join(os.getcwd(), 'event_run.py')
+        cmd = f'{sys.executable} {script} {module} {func} {args} {kwargs}'
+        # print('running', f'"{cmd}"')
+
+        process = subprocess.Popen(
+            shlex.split(cmd),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=os.getcwd(),
+            env=dict(os.environ)
+        )
+
+        if not LOG_CRON_EVENT_LOGS:
+            process.wait()
+        else:
+            # wait for the process to terminate
+            out, err = process.communicate()
+            t = time.time()
+            logs = [
+                {'event_id': event_id, 'index': i, 'line': line, 'epoch': t, 'utc_time': datetime.datetime.utcfromtimestamp(t)}
+                for i, line in enumerate(out.decode().splitlines() + err.decode().splitlines())
+            ]
+            db = get_db()
+            kwargs = {}
+            index_query = 'create index if not exists event_logs_event_id_idx on cron_events_log (event_id);'
+            if isinstance(db, buelon.helpers.postgres.Postgres):
+                index_query = 'create index if not exists event_logs_event_id_idx on cron_events_log using hash (event_id);'
+                kwargs['partition'] = 'event_id'
+                kwargs['partition_query'] = f'''CREATE TABLE if not exists "cron_events_log_{event_id}" 
+                        PARTITION OF "cron_events_log" FOR VALUES IN ('{event_id}');'''
+            if logs:
+                db.upload_table(
+                    f'cron_events_log',
+                    logs,
+                    id_column=['event_id', 'index']
+                )
+                db.query(index_query)
+            errcode = process.returncode
+    finally:
+        try:
+            os.remove(sys.argv[-2])
+        except:
+            pass
+        try:
+            os.remove(sys.argv[-1])
+        except:
+            pass
+
+
+if __name__ == '__main__':
+    main()
 
 
 
