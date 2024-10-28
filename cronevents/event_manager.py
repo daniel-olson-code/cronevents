@@ -9,6 +9,7 @@ import uuid
 import os
 import datetime
 import traceback
+import enum
 
 import dotenv
 import buelon.helpers.sqlite3_helper
@@ -20,6 +21,7 @@ dotenv.load_dotenv('.env')
 # environment variables
 USING_POSTGRES = os.environ.get('CRON_EVENTS_USING_POSTGRES', None) == 'true'
 REGISTER_CRON_EVENT = os.environ.get('REGISTER_CRON_EVENT', None) == 'true'
+REGISTER_VERBOSE_CRON_EVENT = os.environ.get('REGISTER_VERBOSE_CRON_EVENT', None) == 'true'
 # LOG_CRON_EVENT_LOGS = os.environ.get('LOG_CRON_EVENT_LOGS', None) == 'true'  # here for reference. Used in event.py
 LOG_CRON_EVENT_TRIGGERS = os.environ.get('LOG_CRON_EVENT_TRIGGERS', None) == 'true'
 
@@ -27,6 +29,16 @@ DEFAULT_DB = buelon.helpers.sqlite3_helper.Sqlite3(
     location=os.path.join('.cronevents', 'event_manager.db')
 )
 DAYS_OF_THE_WEEK = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
+
+STARTING_TOKENS = ['every', 'in', 'on']
+
+
+class Tokens(enum.Enum):
+    """
+    Tokens for cron event syntax.
+    """
+    OR: str = '||'
+    AT: str = '@'
 
 
 class CronEventError(Exception):
@@ -124,11 +136,24 @@ def query_syntax_checker(query: str) -> None:
     if not isinstance(query, str):
         raise CronEventSyntaxError('Query must be a string')
 
-    query = query.lower()
-    if not query.strip().startswith('every'):
-        raise CronEventSyntaxError('Query must start with "every"')
+    if '||' in query:
+        queries = query.split('||')
+        for i, q in enumerate(queries):
+            try:
+                query_syntax_checker(q.strip())
+            except CronEventSyntaxError as e:
+                raise CronEventSyntaxError(f'Error in query {i + 1}: {e}')
+        return
 
-    query = query.replace('every', '').strip()
+    query = query.lower()
+    if not any(query.strip().startswith(f'{token} ') for token in STARTING_TOKENS):  # not query.strip().startswith('every'):
+        raise CronEventSyntaxError('Query must start with one: ' + ', '.join(STARTING_TOKENS))
+
+    for token in STARTING_TOKENS:
+        if query.strip().startswith(f'{token} '):
+            query = query.replace(f'{token} ', '', 1)
+            break
+    # query = query.replace('every', '').strip()
 
     if '@' in query:
         if query.count('@') > 1:
@@ -217,9 +242,10 @@ def invoke(module, func, args, kwargs):
     if LOG_CRON_EVENT_TRIGGERS:
         get_db().upload_table('cron_event_triggers', [{
             'id': event_id,
-            'epoch': time.time(),
-            'time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            'cmd': cmd,
+            'utc_time': datetime.datetime.fromtimestamp(time.time(), tz=datetime.timezone.utc),  # datetime.datetime.fromtimestamp(time.time(), datetime.UTC),
+            # 'epoch': time.time(),
+            # 'time': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            # 'cmd': cmd,
             'module': module,
             'func': func,
             'args': json.dumps(args),
@@ -231,7 +257,7 @@ def create_event(module, func, args, kwargs, query):
     get_db().upload_table('cronevents', [{
         'id': f'{module}|{func}',
         'query': query,
-        'last': datetime.datetime.utcfromtimestamp(time.time()),
+        'last': datetime.datetime.fromtimestamp(time.time(), tz=datetime.timezone.utc),  # datetime.datetime.fromtimestamp(time.time(), datetime.UTC),
         'module': module,
         'func': func,
         'args': json.dumps(args),
@@ -298,11 +324,19 @@ def ready(row):
         # t = row['time']
         # _type = row['type']
         query: str = row['query'].lower()
+
+        if '||' in query:
+            queries = query.split('||')
+            for q in queries:
+                if ready({**row, 'query': q.strip()}):
+                    return True
+            return False
+
         last = (row['last'] + (row['last'].utcoffset() or datetime.timedelta(seconds=0))).timestamp()
 
         if any([d in query for d in DAYS_OF_THE_WEEK]):
-            last = datetime.datetime.fromtimestamp(last, datetime.UTC)
-            now_utc = datetime.datetime.now(datetime.UTC)
+            last = datetime.datetime.fromtimestamp(last, tz=datetime.timezone.utc)  # datetime.datetime.fromtimestamp(last, datetime.UTC)
+            now_utc = datetime.datetime.fromtimestamp(time.time(), tz=datetime.timezone.utc)  # datetime.datetime.now(datetime.UTC)
             if abs((now_utc - last).days) < 5:  # can only run once a week
                 return False
             if now_utc.strftime('%A').lower() in query:
@@ -319,7 +353,10 @@ def ready(row):
             # print('t', t, time.time() - last)
             return time.time() - last > t
         else:  # _type == '@':
-            time_to = parse_time(query.split('@')[0]) if 'every' in query else 86400 - 30
+            time_to = parse_time(query.split('@')[0]) if any(
+                query.lower().startswith(f'{token} ') for token in STARTING_TOKENS
+            ) else 86400 - 30  # 'every' in query else 86400 - 30
+
             query = query.split('@')[-1]
             q = query.lower().split('am')[0].split('pm')[0]
             if q.count(':') == 0:
@@ -343,15 +380,15 @@ def ready(row):
             force_zero = lambda x: '0' + f'{x}' if len(x) == 1 else f'{x}'
             hr, _min, sec = force_zero(hr), force_zero(_min), force_zero(sec)
             time_to_execute = datetime.datetime.strptime(
-                datetime.datetime.utcnow().strftime('%Y-%m-%d') + f' {hr}:{_min}:{sec}',
+                datetime.datetime.fromtimestamp(time.time(), tz=datetime.timezone.utc).strftime('%Y-%m-%d') + f' {hr}:{_min}:{sec}',
                 '%Y-%m-%d %H:%M:%S'
-            )
+            ).replace(tzinfo=datetime.timezone.utc)
             # print('time_to_execute', time_to_execute, datetime.datetime.now(), time.time() - last, datetime.datetime.now().strftime('%Y-%m-%d') + f' {hr}:{_min}:{sec}')
             days = math.floor((time_to-1) / 60 / 60 / 24)
             datetime.datetime.fromtimestamp(last)
             datetime.datetime.fromtimestamp(time.time())
             enough_time_past = (datetime.datetime.fromtimestamp(time.time()) - datetime.timedelta(days=days)).date() > datetime.datetime.fromtimestamp(last).date()
-            return time_to_execute < datetime.datetime.utcnow() and enough_time_past  # time.time() - last > time_to
+            return time_to_execute < datetime.datetime.fromtimestamp(time.time(), tz=datetime.timezone.utc) and enough_time_past  # time.time() - last > time_to
     except Exception as e:
         print('error in ready', e)
         traceback.print_exc()
@@ -363,8 +400,12 @@ def run(row):
 
 
 def update(row):
-    row['last'] = datetime.datetime.utcfromtimestamp(time.time())  # datetime.datetime.now(datetime.UTC)  # time.time()
-    get_db().upload_table('cronevents', [row], id_column='id')
+    query = row['query']
+    if query.lower().strip().startswith('every'):
+        row['last'] = datetime.datetime.fromtimestamp(time.time(), tz=datetime.timezone.utc)  # datetime.datetime.now(datetime.UTC)  # time.time()
+        get_db().upload_table('cronevents', [row], id_column='id')
+    elif any(query.lower().strip().startswith(pre) for pre in ['in', 'on', 'this', 'next']):
+        get_db().query(f'delete from cronevents where id = \'{row["id"]}\'')
 
 
 def event(query: str, module: str=None, func: str=None, args: list = None, kwargs: dict = None):
@@ -383,6 +424,8 @@ def event(query: str, module: str=None, func: str=None, args: list = None, kwarg
 
             if vals:
                 print('modifying event', module, func)
+                if query != vals[0]['query']:
+                    vals[0]['last'] = datetime.datetime.fromtimestamp(time.time(), tz=datetime.timezone.utc)
                 vals[0]['query'] = query
                 vals[0]['args'] = json.dumps(args or [])
                 vals[0]['kwargs'] = json.dumps(kwargs or {})
@@ -395,13 +438,17 @@ def event(query: str, module: str=None, func: str=None, args: list = None, kwarg
 
 
 def main():
-    print('version 0.0.28')
+    print('version 0.0.31-alpha12')
     while True:
         try:
             for row in get_db().download_table('cronevents'):
-                if ready(row):
-                    run(row)
-                    update(row)
+                try:
+                    query_syntax_checker(row['query'])
+                    if ready(row):
+                        run(row)
+                        update(row)
+                except CronEventSyntaxError:
+                    get_db().query(f'delete from cronevents where id = \'{row["id"]}\'')
         except buelon.helpers.postgres.psycopg2.errors.UndefinedTable:
             print('No events have been registered')
             time.sleep(10.)
