@@ -138,11 +138,11 @@ def query_syntax_checker(query: str) -> None:
 
     if '||' in query:
         queries = query.split('||')
-        for i, q in enumerate(queries):
+        for q in queries:
             try:
                 query_syntax_checker(q.strip())
             except CronEventSyntaxError as e:
-                raise CronEventSyntaxError(f'Error in query {i + 1}: {e}')
+                raise CronEventSyntaxError(f'Error in query `{q}`: {e}')
         return
 
     query = query.lower()
@@ -211,6 +211,10 @@ def query_syntax_checker(query: str) -> None:
             if token not in units:
                 raise CronEventSyntaxError(f'Expected unit, got `{token}`. Available units {", ".join(units)}')
             on_number = True
+
+    if not on_number:
+        raise CronEventSyntaxError(f'Expected unit, got end of query. Please add a unit or remove the last number. '
+                                   f'Units: {", ".join(units)}')
 
 
 def temp_file_name():
@@ -438,7 +442,7 @@ def event(query: str, module: str=None, func: str=None, args: list = None, kwarg
 
 
 def main():
-    print('version 0.0.31-alpha12')
+    print('version 0.0.31-alpha14')
     while True:
         try:
             for row in get_db().download_table('cronevents'):
