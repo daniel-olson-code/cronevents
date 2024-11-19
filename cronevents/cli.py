@@ -8,7 +8,7 @@ import cronevents.register
 
 def cli():
     parser = argparse.ArgumentParser(description='Buelon command-line interface')
-    parser.add_argument('-v', '--version', action='version', version='Cron Events 0.0.31-alpha9')
+    parser.add_argument('-v', '--version', action='version', version='Cron Events 0.0.31-alpha14')
 
     subparsers = parser.add_subparsers(title='Commands', dest='command', required=False)
 
